@@ -8,18 +8,23 @@ from thefuzz import process, fuzz
 st.set_page_config(page_title="Trợ Lý Giải Đề AI", page_icon="🎓")
 
 st.title("🎓 Trợ Lý Giải Đề & Chống Đảo Đáp Án")
-st.write("Tải ảnh câu hỏi lên, AI sẽ tìm đáp án đúng trong Excel và chỉ cho bạn vị trí trên ảnh.")
 
 # --- SIDEBAR: Cấu hình ---
 with st.sidebar:
     st.header("⚙️ Cấu hình")
-    api_key = st.text_input("Nhập Gemini API Key", type="password")
+    api_key = st.text_input("1. Nhập Gemini API Key", type="password")
     
-    st.info("Upload file Ngân hàng câu hỏi (Excel/CSV)")
-    uploaded_file = st.file_uploader("Chọn file dữ liệu", type=["xlsx", "csv", "xls"])
+    # [MỚI] Cho phép bạn tự điền tên mô hình (Ví dụ: gemini-2.5-flash)
+    model_name = st.text_input("2. Tên Mô hình (Model Name)", value="gemini-1.5-flash")
+    st.caption("Gợi ý: gemini-1.5-flash, gemini-2.0-flash-exp, hoặc tên model bạn thấy trong Console.")
+    
+    st.divider()
+    
+    st.info("3. Upload file Ngân hàng câu hỏi")
+    uploaded_file = st.file_uploader("Chọn file Excel/CSV", type=["xlsx", "csv", "xls"])
 
     col_question = st.text_input("Tên cột Câu Hỏi", value="Question")
-    col_answer = st.text_input("Tên cột Đáp Án (Nội dung)", value="Answer")
+    col_answer = st.text_input("Tên cột Đáp Án", value="Answer")
 
 # --- HÀM XỬ LÝ ---
 def load_data(file):
@@ -34,7 +39,6 @@ def load_data(file):
 
 def get_gemini_response(model, image, prompt):
     try:
-        # Cách gọi đơn giản nhất: gửi list [text, image]
         response = model.generate_content([prompt, image])
         return response.text.strip()
     except Exception as e:
@@ -43,72 +47,64 @@ def get_gemini_response(model, image, prompt):
 
 # --- GIAO DIỆN CHÍNH ---
 if not api_key:
-    st.warning("⚠️ Vui lòng nhập API Key ở thanh bên trái để bắt đầu.")
+    st.warning("⚠️ Vui lòng nhập API Key để bắt đầu.")
     st.stop()
 
-# Cấu hình API
+# Cấu hình API với tên mô hình bạn nhập
 try:
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash') # Dùng bản 1.5 Flash cho ổn định
+    model = genai.GenerativeModel(model_name) # <--- Sửa đổi quan trọng ở đây
 except Exception as e:
-    st.error(f"API Key không hợp lệ: {e}")
+    st.error(f"Cấu hình thất bại: {e}")
     st.stop()
 
 if uploaded_file is None:
-    st.warning("⚠️ Vui lòng tải lên file Excel ngân hàng câu hỏi.")
+    st.warning("⚠️ Vui lòng tải lên file dữ liệu.")
     st.stop()
 
-# Load dữ liệu
 df = load_data(uploaded_file)
 
 if df is not None:
-    st.success(f"✅ Đã tải {len(df)} câu hỏi vào bộ nhớ.")
+    st.success(f"✅ Đã tải {len(df)} câu hỏi.")
 
-    # Upload ảnh câu hỏi
     st.divider()
-    st.subheader("📸 Chụp/Tải ảnh câu hỏi")
-    img_file = st.file_uploader("Upload ảnh đề thi", type=["jpg", "png", "jpeg"])
+    img_file = st.file_uploader("📸 Tải ảnh đề thi lên đây", type=["jpg", "png", "jpeg"])
 
     if img_file:
         image = Image.open(img_file)
         st.image(image, caption="Ảnh đề thi", use_container_width=True)
 
         if st.button("🚀 GIẢI ĐỀ NGAY", type="primary"):
-            with st.spinner("🤖 Đang đọc đề và tra cứu..."):
+            with st.spinner("🤖 Đang xử lý..."):
                 
                 # BƯỚC 1: Đọc câu hỏi
-                prompt_ocr = "Trích xuất nội dung câu hỏi chính trong ảnh. Chỉ lấy text câu hỏi, không lấy đáp án."
-                q_text = get_gemini_response(model, image, prompt_ocr)
+                q_text = get_gemini_response(model, image, "Trích xuất câu hỏi chính. Chỉ lấy text, không lấy đáp án.")
                 
                 if q_text:
                     st.write(f"**🔍 Đọc được:** {q_text}")
                     
-                    # BƯỚC 2: Tìm trong Excel (Fuzzy Search)
+                    # BƯỚC 2: Tìm trong Excel
                     try:
-                        # Chuyển đổi cột thành string để tránh lỗi dữ liệu
                         choices = df[col_question].dropna().astype(str).tolist()
                         best_match, score = process.extractOne(q_text, choices, scorer=fuzz.token_sort_ratio)
                     except KeyError:
-                        st.error(f"Không tìm thấy cột '{col_question}' trong file Excel. Hãy kiểm tra lại tên cột ở Sidebar.")
+                        st.error(f"Sai tên cột '{col_question}'. Kiểm tra lại file Excel.")
                         st.stop()
 
                     if score > 60: 
                         row = df[df[col_question] == best_match].iloc[0]
-                        correct_answer_content = row[col_answer]
+                        correct_ans = row[col_answer]
 
-                        st.success("✅ **ĐÃ TÌM THẤY TRONG KHO!**")
-                        st.info(f"📖 **Nội dung đáp án đúng:** {correct_answer_content}")
+                        st.success("✅ **ĐÃ TÌM THẤY!**")
+                        st.info(f"📖 **Đáp án đúng:** {correct_ans}")
 
-                        # BƯỚC 3: Soi lại ảnh để chống đảo đề
+                        # BƯỚC 3: Chống đảo đề
                         check_prompt = f"""
-                        Đáp án đúng của câu này là: "{correct_answer_content}".
-                        Hãy nhìn vào bức ảnh này, tìm xem nội dung đáp án đó đang nằm ở vị trí A, B, C hay D?
-                        Hãy trả lời ngắn gọn: "Bạn nên chọn [X] vì [Lý do ngắn]".
+                        Đáp án đúng là: "{correct_ans}".
+                        Nhìn vào ảnh, nội dung đáp án này nằm ở vị trí A, B, C hay D?
+                        Trả lời ngắn: "Chọn [X] vì [Lý do]".
                         """
-                        
                         advice = get_gemini_response(model, image, check_prompt)
                         st.markdown(f"### 💡 {advice}")
-                        
                     else:
-                        st.error(f"❌ Không tìm thấy câu hỏi này (Độ khớp: {score}%).")
-                        st.write(f"Câu hỏi giống nhất: {best_match}")
+                        st.error(f"❌ Không tìm thấy (Độ khớp: {score}%).")
