@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 from PIL import Image
 from thefuzz import process, fuzz
 
@@ -19,7 +18,6 @@ with st.sidebar:
     st.info("Upload file Ngân hàng câu hỏi (Excel/CSV)")
     uploaded_file = st.file_uploader("Chọn file dữ liệu", type=["xlsx", "csv", "xls"])
 
-    # Chọn cột dữ liệu
     col_question = st.text_input("Tên cột Câu Hỏi", value="Question")
     col_answer = st.text_input("Tên cột Đáp Án (Nội dung)", value="Answer")
 
@@ -34,19 +32,10 @@ def load_data(file):
         st.error(f"Lỗi đọc file: {e}")
         return None
 
-def get_gemini_response(client, image, prompt):
+def get_gemini_response(model, image, prompt):
     try:
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=[
-                types.Content(
-                    parts=[
-                        types.Part.from_image(image),
-                        types.Part.from_text(text=prompt)
-                    ]
-                )
-            ]
-        )
+        # Cách gọi đơn giản nhất: gửi list [text, image]
+        response = model.generate_content([prompt, image])
         return response.text.strip()
     except Exception as e:
         st.error(f"Lỗi Gemini: {e}")
@@ -55,6 +44,14 @@ def get_gemini_response(client, image, prompt):
 # --- GIAO DIỆN CHÍNH ---
 if not api_key:
     st.warning("⚠️ Vui lòng nhập API Key ở thanh bên trái để bắt đầu.")
+    st.stop()
+
+# Cấu hình API
+try:
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash') # Dùng bản 1.5 Flash cho ổn định
+except Exception as e:
+    st.error(f"API Key không hợp lệ: {e}")
     st.stop()
 
 if uploaded_file is None:
@@ -78,25 +75,24 @@ if df is not None:
 
         if st.button("🚀 GIẢI ĐỀ NGAY", type="primary"):
             with st.spinner("🤖 Đang đọc đề và tra cứu..."):
-                client = genai.Client(api_key=api_key)
-
+                
                 # BƯỚC 1: Đọc câu hỏi
-                q_text = get_gemini_response(client, image, "Trích xuất nội dung câu hỏi chính trong ảnh. Chỉ lấy text câu hỏi, không lấy đáp án.")
+                prompt_ocr = "Trích xuất nội dung câu hỏi chính trong ảnh. Chỉ lấy text câu hỏi, không lấy đáp án."
+                q_text = get_gemini_response(model, image, prompt_ocr)
                 
                 if q_text:
                     st.write(f"**🔍 Đọc được:** {q_text}")
                     
                     # BƯỚC 2: Tìm trong Excel (Fuzzy Search)
-                    # Lấy danh sách câu hỏi từ cột user nhập
                     try:
+                        # Chuyển đổi cột thành string để tránh lỗi dữ liệu
                         choices = df[col_question].dropna().astype(str).tolist()
                         best_match, score = process.extractOne(q_text, choices, scorer=fuzz.token_sort_ratio)
                     except KeyError:
                         st.error(f"Không tìm thấy cột '{col_question}' trong file Excel. Hãy kiểm tra lại tên cột ở Sidebar.")
                         st.stop()
 
-                    if score > 60: # Độ tin cậy trên 60%
-                        # Lấy dòng tương ứng
+                    if score > 60: 
                         row = df[df[col_question] == best_match].iloc[0]
                         correct_answer_content = row[col_answer]
 
@@ -110,9 +106,9 @@ if df is not None:
                         Hãy trả lời ngắn gọn: "Bạn nên chọn [X] vì [Lý do ngắn]".
                         """
                         
-                        advice = get_gemini_response(client, image, check_prompt)
+                        advice = get_gemini_response(model, image, check_prompt)
                         st.markdown(f"### 💡 {advice}")
                         
                     else:
-                        st.error(f"❌ Không tìm thấy câu hỏi này trong ngân hàng dữ liệu (Độ khớp cao nhất: {score}%).")
-                        st.write(f"Câu hỏi giống nhất tìm được: {best_match}")
+                        st.error(f"❌ Không tìm thấy câu hỏi này (Độ khớp: {score}%).")
+                        st.write(f"Câu hỏi giống nhất: {best_match}")
